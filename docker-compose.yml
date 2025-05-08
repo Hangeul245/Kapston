@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: mysql://test1:test1@db:3306/my_db
+    networks:
+      - capstone-net
+    volumes:
+      - .:/app
+
+networks:
+  capstone-net:
+    external: true
