@@ -173,6 +173,7 @@ FLT_PREOP_CALLBACK_STATUS MiniFilterPreWriteOperation(
 )
 {
     UNREFERENCED_PARAMETER(CompletionContext);
+    UNREFERENCED_PARAMETER(FltObjects);
 
     PFLT_FILE_NAME_INFORMATION fileInfo;
     NTSTATUS status;
@@ -189,6 +190,29 @@ FLT_PREOP_CALLBACK_STATUS MiniFilterPreWriteOperation(
 
     if (RtlCompareUnicodeString(&fileInfo->Name, &gBaitFilePath, TRUE) == 0) {
         FltReleaseFileNameInformation(fileInfo);
+
+        if (g_ClientPort != NULL) {
+            CHAR message[] = "RANSOMWARE_DETECTED";
+            SIZE_T replyLength = 0;
+
+            status = FltSendMessage(
+                gFilterHandle,
+                &g_ClientPort,
+                message,
+                sizeof(message),
+                NULL,
+                &replyLength,
+                NULL
+            );
+
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("FltSendMessage failed: 0x%08X\n", status);
+            }
+        }
+        else {
+            DbgPrint("Client port is NULL. Message not sent.\n");
+        }
+
         Data->IoStatus.Status = STATUS_ACCESS_DENIED;
         Data->IoStatus.Information = 0;
         return FLT_PREOP_COMPLETE;
