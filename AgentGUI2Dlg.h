@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "resource.h"
 #include <afxwin.h>  // CDialogEx 포함을 보장
@@ -8,6 +8,10 @@ class CAgentGUI2Dlg : public CDialogEx
 {
 public:
 	CAgentGUI2Dlg(CWnd* pParent = nullptr);
+
+	// ✅ public 함수들
+	void AppendLog(CString log);            // 로그 출력
+	void PostToServer(CString jsonData);    // WinHTTP POST 전송
 
 #ifdef AFX_DESIGN_TIME
 	enum { IDD = IDD_AGENTGUI2_DIALOG };
@@ -19,8 +23,8 @@ protected:
 	afx_msg void OnSysCommand(UINT nID, LPARAM lParam);
 	afx_msg void OnPaint();
 	afx_msg HCURSOR OnQueryDragIcon();
-	afx_msg LRESULT OnPostInit(WPARAM wParam, LPARAM lParam);    // 초기 자동 전송 메시지
-	afx_msg void ClickedButton1();  // 버튼 클릭 시 호출되는 함수
+	afx_msg LRESULT OnPostInit(WPARAM wParam, LPARAM lParam); // 초기 자동 전송 메시지
+	afx_msg void ClickedButton1(); // 버튼 클릭 시 호출되는 함수
 
 	DECLARE_MESSAGE_MAP()
 
@@ -32,10 +36,7 @@ private:
 	CStatic m_lblStatus;
 	CEdit m_editInput;
 
-	// 내부 함수 선언
-	void AppendLog(CString log);           // GUI 로그 출력
+	// private 함수들
 	void AppendToFile(CString text);       // 텍스트 파일 로그 저장
-	void PostToServer(CString jsonData);   // WinHTTP POST 전송
-	void RequestDirectoryFromKernel();     // 🔁 커널로부터 디렉터리 요청  ← 이거 추가!
-
+	void RequestDirectoryFromKernel();     // 커널로부터 디렉터리 요청
 };
