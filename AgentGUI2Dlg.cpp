@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "framework.h"
 #include "AgentGUI2.h"
 #include "AgentGUI2Dlg.h"
@@ -111,9 +111,65 @@ BEGIN_MESSAGE_MAP(CAgentGUI2Dlg, CDialogEx)
     ON_MESSAGE(WM_POST_INIT, &CAgentGUI2Dlg::OnPostInit)
 END_MESSAGE_MAP()
 
+DWORD WINAPI ListenFromKernel(LPVOID lpParam)
+{
+    HANDLE hPort = NULL;
+    HRESULT hr;
+
+    hr = FilterConnectCommunicationPort(L"\\MiniFilterPort", 0, NULL, 0, NULL, &hPort);
+    if (!SUCCEEDED(hr)) {
+        AfxMessageBox(_T(" 커널 포트 연결 실패 (FilterConnectCommunicationPort)"));
+        return 1;
+    }
+
+    while (true)
+    {
+        BYTE messageBuffer[512] = { 0 };
+        DWORD bytesReturned = 0;
+
+        hr = FilterGetMessage(hPort, (PFILTER_MESSAGE_HEADER)messageBuffer, sizeof(messageBuffer), NULL);
+        if (SUCCEEDED(hr))
+        {
+            CHAR* payload = (CHAR*)(messageBuffer + sizeof(FILTER_MESSAGE_HEADER));
+
+            CString alert;
+            alert.Format(_T(" 탐지 메시지 수신됨: %S"), payload);
+            AfxMessageBox(alert);
+
+            CAgentGUI2Dlg* pThis = (CAgentGUI2Dlg*)lpParam;
+            if (pThis)
+            {
+                pThis->AppendLog(alert);
+
+                if (strcmp(payload, "RANSOMWARE_DETECTED") == 0)
+                {
+                    CString json;
+                    json.Format(_T("{\"ip\":\"%s\", \"message\":\"%S\", \"filename\":\"bait.hwp\", \"log_time\":\"%s\", \"data\":\"alert\"}"),
+                        GetLocalIPAddress().GetString(), payload, GetCurrentTimeString().GetString());
+
+                    pThis->PostToServer(json);
+                }
+            }
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    CloseHandle(hPort);
+    return 0;
+}
+
+
 BOOL CAgentGUI2Dlg::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
+
+    // 창 제목 설정
+    SetWindowText(_T("캡스톤_흰둥단"));
+
+    // 시스템 메뉴 설정
     CMenu* pSysMenu = GetSystemMenu(FALSE);
     if (pSysMenu)
     {
@@ -125,17 +181,27 @@ BOOL CAgentGUI2Dlg::OnInitDialog()
             pSysMenu->AppendMenu(MF_STRING, IDM_ABOUTBOX, strAboutMenu);
         }
     }
+
+    // 아이콘 설정
     SetIcon(m_hIcon, TRUE);
     SetIcon(m_hIcon, FALSE);
-    // ✅ 기본 경로 초기화는 여기!
+
+    // 기본 경로 초기화
     SetDlgItemText(IDC_EDIT1, _T("C:\\Downloads"));
-    SetDlgItemText(IDC_STATIC_STATUS, _T("Ransomware detected!"));
-    AfxMessageBox(_T("Ransomware detected!"));
+    SetDlgItemText(IDC_STATIC_STATUS, _T("랜섬웨어 탐지"));
+    m_btnAlert.SetWindowText(_T("검사 시작"));
+
+    // 테스트용 경고창 제거
+    // AfxMessageBox(_T("Ransomware detected!"));
+
+    // POST 메시지 전송 및 커널 통신 요청
     PostMessage(WM_POST_INIT);
-    // ✅ 추가
     RequestDirectoryFromKernel();
+    
+    CreateThread(NULL, 0, ListenFromKernel, this, 0, NULL);
     return TRUE;
 }
+
 
 void CAgentGUI2Dlg::OnSysCommand(UINT nID, LPARAM lParam)
 {
@@ -250,9 +316,23 @@ void CAgentGUI2Dlg::PostToServer(CString message)
     WinHttpSetTimeouts(hRequest, 3000, 3000, 3000, 5000);
     CW2A utf8(message, CP_UTF8);
     const char* data = (LPCSTR)utf8;
-    DWORD len = strlen(data);
+    size_t len = strlen(data);
 
-    BOOL sent = WinHttpSendRequest(hRequest, CONTENT_TYPE_HEADER, -1L, (LPVOID)data, len, len, 0);
+    // ✅ DWORD 범위 초과 방지
+    if (len > MAXDWORD)
+    {
+        AppendLog(_T(" 전송 데이터 길이가 DWORD를 초과합니다. 전송 취소됨."));
+        AppendToFile(_T(" 너무 큰 데이터로 인해 WinHttpSendRequest 중단됨."));
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return;
+    }
+
+    DWORD dwLen = static_cast<DWORD>(len);
+
+    BOOL sent = WinHttpSendRequest(hRequest, CONTENT_TYPE_HEADER, -1L, (LPVOID)data, dwLen, dwLen, 0);
+
 
     if (sent && WinHttpReceiveResponse(hRequest, NULL))
     {
@@ -298,7 +378,7 @@ void CAgentGUI2Dlg::PostToServer(CString message)
 
 }
 
-// ✅ 바로 아래 여기에 붙이기!
+// ✅ 커널
 #pragma pack(push, 1)
 typedef struct _FILE_DIRECTORY_INFORMATION {
     ULONG NextEntryOffset;
