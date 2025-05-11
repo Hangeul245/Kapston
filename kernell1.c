@@ -272,8 +272,12 @@ NTSTATUS DriverEntry(
     );
 
     if (!NT_SUCCESS(status)) {
+        DbgPrint("Failed to create communication port: 0x%08X\n", status);
         FltUnregisterFilter(gFilterHandle);
         return status;
+    }
+    else {
+        DbgPrint("Successfully created communication port.\n");
     }
 
     return FltStartFiltering(gFilterHandle);
