@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "framework.h"
 #include "AgentGUI2.h"
 #include "AgentGUI2Dlg.h"
