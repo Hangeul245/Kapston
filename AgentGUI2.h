@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #ifndef __AFXWIN_H__
 #error "pch.h를 먼저 포함하세요."
