@@ -12,7 +12,6 @@ ClassGuid = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
 Provider    = %ManufacturerName%
 CatalogFile = kernell1.cat
 PnpLockDown=1
-DriverVer = 05/11/2025,17.33.39.480
 
 [DestinationDirs]
 DefaultDestDir          = 12
