@@ -10,6 +10,7 @@ Signature   = "$Windows NT$"
 Class = "ActivityMonitor"
 ClassGuid = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
 Provider    = %ManufacturerName%
+DriverVer = 06/05/2025,13.22.53.561
 CatalogFile = kernell1.cat
 PnpLockDown=1
 
@@ -20,29 +21,45 @@ MiniFilter.DriverFiles  = 12            ;%windir%\system32\drivers
 ;;
 ;; Default install sections
 ;;
+[DriverCopyFiles]
+kernell1.sys
+
+[AddServiceRegistry]
+HKR,,DevLoader,,*ntkern
+HKR,,NTMPDriver,,kernell1.sys
+HKR,,DontStartIfChild,,1
 
 [DefaultInstall]
 OptionDesc          = %ServiceDescription%
 CopyFiles           = MiniFilter.DriverFiles
 
 [DefaultInstall.Services]
-AddService          = %ServiceName%,,MiniFilter.Service
+AddService = kernell1, 0x00000002, MiniFilter.Service
+
+[DefaultInstall.ntamd64]
+CopyFiles = DriverCopyFiles
+AddReg    = AddServiceRegistry
+Include   = kernell1.inf
+Needs     = kernell1_Install
+
+[DefaultInstall.Services.ntamd64]
+AddService = kernell1, 0x00000002, kernell1_ServiceInstall
 
 ;;
 ;; Default uninstall sections
 ;;
 
-[DefaultUninstall.ntx86]
-DelFiles   = MiniFilter.DriverFiles
+;;[DefaultUninstall.ntx86]
+;;DelFiles   = MiniFilter.DriverFiles
 
 [DefaultUninstall.Services.ntx86]
 DelService = %ServiceName%,0x200
 
 [DefaultUninstall.ntamd64]
-DelFiles   = MiniFilter.DriverFiles
+DelFiles = DriverCopyFiles
 
 [DefaultUninstall.Services.ntamd64]
-DelService = %ServiceName%,0x200
+DelService = kernell1,0x200
 
 
 
@@ -53,7 +70,7 @@ DelService = %ServiceName%,0x200
 [MiniFilter.Service]
 DisplayName      = %ServiceName%
 Description      = %ServiceDescription%
-ServiceBinary    = %12%\%DriverName%.sys        ;%windir%\system32\drivers\
+ServiceBinary    = %12%\kernell1.sys        ;%windir%\system32\drivers\
 Dependencies     = "FltMgr"
 ServiceType      = 2                            ;SERVICE_FILE_SYSTEM_DRIVER
 StartType        = 3                            ;SERVICE_DEMAND_START
@@ -94,7 +111,7 @@ kernell1.sys = 1,,
 
 [Strings]
 ; TODO - Add your manufacturer
-ManufacturerName        = "Template"
+ManufacturerName        = "Kapston"
 ServiceDescription      = "kernell1 Mini-Filter Driver"
 ServiceName             = "kernell1"
 DriverName              = "kernell1"
