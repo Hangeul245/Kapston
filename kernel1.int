@@ -1,0 +1,56 @@
+;
+; kernel1.inf - Hyunsung Minifilter Ransomware Driver 설치용
+;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "ActivityMonitor"
+ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
+Provider    = %ManufacturerName%
+CatalogFile = kernel1.cat
+DriverVer = 06/15/2025,15.31.43.399
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir         = 12
+MiniFilter.DriverFiles = 12
+
+[DefaultInstall.ntamd64]
+OptionDesc = %ServiceDescription%
+CopyFiles  = MiniFilter.DriverFiles
+AddService = %ServiceName%, 0x00000002, MiniFilter.Service
+AddReg     = MiniFilter.AddReg
+
+[DefaultUninstall.ntamd64]
+DelFiles   = MiniFilter.DriverFiles
+DelService = %ServiceName%, 0x00000002
+LegacyUninstall = 1
+
+[MiniFilter.DriverFiles]
+kernel1.sys
+
+[MiniFilter.Service]
+DisplayName    = %ServiceDescription%
+ServiceType    = 2
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\kernel1.sys
+LoadOrderGroup = "FSFilter Activity Monitor"
+AddReg         = MiniFilter.AddReg
+
+[MiniFilter.AddReg]
+HKR,"Instances","DefaultInstance",0,"kernel1 Instance"
+HKR,"Instances\kernel1 Instance","Altitude",0x00000000,"370030"
+HKR,"Instances\kernel1 Instance","Flags",0x00010001,0
+
+[SourceDisksFiles]
+kernel1.sys = 1
+
+[SourceDisksNames]
+1 = %DiskName%,,,,
+
+[Strings]
+ManufacturerName = "HyunsungRansomware"
+ServiceName = "kernel1"
+ServiceDescription = "Hyunsung Minifilter Ransomware Driver"
+DiskName = "Kernel1 Install Disk"
