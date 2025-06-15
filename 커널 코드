@@ -1,0 +1,245 @@
+#include <fltKernel.h>
+#include <dontuse.h>
+#include <suppress.h>
+#include <ntstrsafe.h>
+#include <wchar.h>
+
+#pragma warning(disable:4189)
+#pragma warning(disable:4100)
+#pragma warning(disable:4133)
+
+PFLT_FILTER gFilterHandle = NULL;
+PFLT_PORT g_ServerPort = NULL;
+PFLT_PORT g_ClientPort = NULL;
+volatile BOOLEAN g_IsUnloading = FALSE;
+
+#pragma pack(push, 1)
+typedef struct _DETECTION_MESSAGE {
+    CHAR AlertType[64];      // "RANSOMWARE_DETECTED"
+    CHAR FileName[260];      // ANSI 경로
+    ULONG ProcessId;
+} DETECTION_MESSAGE;
+#pragma pack(pop)
+
+VOID MiniFilterUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
+{
+    UNREFERENCED_PARAMETER(Flags);
+    DbgPrint("[RANSOM] MiniFilterUnload 호출됨\n");
+
+    g_IsUnloading = TRUE;
+
+    if (g_ClientPort) {
+        FltCloseClientPort(gFilterHandle, &g_ClientPort);
+        g_ClientPort = NULL;
+    }
+    if (g_ServerPort) {
+        FltCloseCommunicationPort(g_ServerPort);
+        g_ServerPort = NULL;
+    }
+    if (gFilterHandle) {
+        FltUnregisterFilter(gFilterHandle);
+        gFilterHandle = NULL;
+    }
+}
+
+NTSTATUS MiniFilterInstanceSetup(
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _In_ FLT_INSTANCE_SETUP_FLAGS Flags,
+    _In_ DEVICE_TYPE VolumeDeviceType,
+    _In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType)
+{
+    UNREFERENCED_PARAMETER(FltObjects);
+    UNREFERENCED_PARAMETER(Flags);
+    UNREFERENCED_PARAMETER(VolumeDeviceType);
+    UNREFERENCED_PARAMETER(VolumeFilesystemType);
+
+    DbgPrint("[RANSOM] MiniFilterInstanceSetup 호출됨\n");
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS MiniFilterConnectNotify(
+    PFLT_PORT ClientPort,
+    PVOID ServerPortCookie,
+    PVOID ConnectionContext,
+    ULONG SizeOfContext,
+    PVOID* ConnectionCookie)
+{
+    UNREFERENCED_PARAMETER(ServerPortCookie);
+    UNREFERENCED_PARAMETER(ConnectionContext);
+    UNREFERENCED_PARAMETER(SizeOfContext);
+    UNREFERENCED_PARAMETER(ConnectionCookie);
+
+    g_ClientPort = ClientPort;
+    DbgPrint("[RANSOM] MiniFilterConnectNotify: 클라이언트 포트 연결됨\n");
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS MiniFilterMessageNotify(
+    PVOID PortCookie,
+    PVOID InputBuffer,
+    ULONG InputBufferLength,
+    PVOID OutputBuffer,
+    ULONG OutputBufferLength,
+    PULONG ReturnOutputBufferLength)
+{
+    UNREFERENCED_PARAMETER(PortCookie);
+    UNREFERENCED_PARAMETER(OutputBuffer);
+    UNREFERENCED_PARAMETER(OutputBufferLength);
+
+    if (!InputBuffer || InputBufferLength == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    CHAR* message = (CHAR*)InputBuffer;
+
+    if (strcmp(message, "TERMINATE") == 0 && g_ClientPort) {
+        DbgPrint("[RANSOM] TERMINATE 수신: 포트 종료\n");
+        FltCloseClientPort(gFilterHandle, &g_ClientPort);
+        g_ClientPort = NULL;
+    }
+
+    if (ReturnOutputBufferLength)
+        *ReturnOutputBufferLength = 0;
+
+    return STATUS_SUCCESS;
+}
+
+FLT_PREOP_CALLBACK_STATUS MiniFilterPreWriteOperation(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _Out_ PVOID* CompletionContext)
+{
+    UNREFERENCED_PARAMETER(FltObjects);
+    *CompletionContext = NULL;
+
+    if (!Data->Iopb->TargetFileObject || Data->Iopb->Parameters.Write.Length == 0)
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+    PFLT_FILE_NAME_INFORMATION fileInfo;
+    NTSTATUS status = FltGetFileNameInformation(
+        Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_ALWAYS_ALLOW_CACHE_LOOKUP,
+        &fileInfo);
+
+    if (!NT_SUCCESS(status)) return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+    FltParseFileNameInformation(fileInfo);
+    DbgPrint("[RANSOM] 파일 경로: %.*ws\n", fileInfo->Name.Length / sizeof(WCHAR), fileInfo->Name.Buffer);
+
+    if (wcsstr(fileInfo->Name.Buffer, L"agent_log.txt") != NULL) {
+        FltReleaseFileNameInformation(fileInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (wcscmp(fileInfo->Name.Buffer, L"\\Device\\HarddiskVolume3\\Users\\이현성\\Downloads\\important.hwp") == 0) {
+        DbgPrint("[RANSOM] 미끼 파일 접근 감지됨\n");
+
+        if (!g_IsUnloading && g_ClientPort) {
+            DETECTION_MESSAGE msg = { 0 };
+            msg.ProcessId = FltGetRequestorProcessId(Data);
+            strcpy_s(msg.AlertType, sizeof(msg.AlertType), "RANSOMWARE_DETECTED");
+
+            ANSI_STRING ansiName;
+            UNICODE_STRING uniName;
+            RtlInitUnicodeString(&uniName, fileInfo->Name.Buffer);
+
+            status = RtlUnicodeStringToAnsiString(&ansiName, &uniName, TRUE);
+            if (NT_SUCCESS(status)) {
+                RtlStringCbCopyA(msg.FileName, sizeof(msg.FileName), ansiName.Buffer);
+                RtlFreeAnsiString(&ansiName);
+            }
+            else {
+                DbgPrint("[RANSOM] 문자열 변환 실패\n");
+                FltReleaseFileNameInformation(fileInfo);
+                return FLT_PREOP_SUCCESS_NO_CALLBACK;
+            }
+
+            status = FltSendMessage(
+                gFilterHandle,
+                g_ClientPort,
+                &msg,
+                sizeof(DETECTION_MESSAGE),
+                NULL,
+                0,
+                NULL
+            );
+
+            if (NT_SUCCESS(status)) {
+                DbgPrint("[RANSOM] FltSendMessage 성공\n");
+            }
+            else {
+                DbgPrint("[RANSOM] FltSendMessage 실패: 0x%08X\n", status);
+            }
+        }
+        else {
+            DbgPrint("[RANSOM] 메시지 전송 생략 (Unloading 중이거나 포트 없음)\n");
+        }
+
+        FltReleaseFileNameInformation(fileInfo);
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
+    FltReleaseFileNameInformation(fileInfo);
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+CONST FLT_OPERATION_REGISTRATION Callbacks[] = {
+    { IRP_MJ_WRITE, 0, MiniFilterPreWriteOperation, NULL },
+    { IRP_MJ_OPERATION_END }
+};
+
+const FLT_REGISTRATION FilterRegistration = {
+    sizeof(FLT_REGISTRATION),
+    FLT_REGISTRATION_VERSION,
+    0,
+    NULL,
+    Callbacks,
+    MiniFilterUnload,
+    MiniFilterInstanceSetup,
+    NULL, NULL, NULL, NULL, NULL, NULL
+};
+
+NTSTATUS NTAPI DriverEntry(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ PUNICODE_STRING RegistryPath)
+{
+    UNREFERENCED_PARAMETER(RegistryPath);
+    DbgPrint("[RANSOM] DriverEntry 시작\n");
+
+    NTSTATUS status = FltRegisterFilter(DriverObject, &FilterRegistration, &gFilterHandle);
+    if (!NT_SUCCESS(status)) return status;
+
+    PSECURITY_DESCRIPTOR sd;
+    status = FltBuildDefaultSecurityDescriptor(&sd, FLT_PORT_ALL_ACCESS);
+    if (!NT_SUCCESS(status)) {
+        FltUnregisterFilter(gFilterHandle);
+        return status;
+    }
+
+    UNICODE_STRING portName;
+    RtlInitUnicodeString(&portName, L"\\MiniFilterPort");
+
+    OBJECT_ATTRIBUTES oa;
+    InitializeObjectAttributes(&oa, &portName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, sd);
+
+    status = FltCreateCommunicationPort(
+        gFilterHandle,
+        &g_ServerPort,
+        &oa,
+        NULL,
+        MiniFilterConnectNotify,
+        NULL,
+        MiniFilterMessageNotify,
+        NULL // 보안 디스크립터는 oa에 포함되어 있으므로 NULL
+    );
+
+    FltFreeSecurityDescriptor(sd);
+
+    if (!NT_SUCCESS(status)) {
+        FltUnregisterFilter(gFilterHandle);
+        return status;
+    }
+
+    return FltStartFiltering(gFilterHandle);
+}
