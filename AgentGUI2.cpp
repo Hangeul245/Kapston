@@ -47,9 +47,10 @@ BOOL CAgentGUI2App::InitInstance()
     }
     else if (nResponse == -1)
     {
-        AfxMessageBox(_T("⚠️ 대화상자 생성 실패: 시스템 리소스 부족 또는 기타 오류"), MB_ICONERROR);
+        AfxMessageBox(_T(" 대화상자 생성 실패: 시스템 리소스 부족 또는 기타 오류"), MB_ICONERROR);
     }
 
     // 프로그램 종료 → 메시지 루프 생략
     return FALSE;
+
 }
