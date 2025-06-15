@@ -16,7 +16,28 @@
 #pragma comment(lib, "Shell32.lib")
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "fltLib.lib")
+#pragma pack(push, 1)
+typedef struct _DETECTION_MESSAGE {
+    char AlertType[64];
+    char FileName[260];
+    unsigned long ProcessId;
+} DETECTION_MESSAGE;
 
+typedef struct _FILE_DIRECTORY_INFORMATION {
+    ULONG NextEntryOffset;
+    ULONG FileIndex;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER EndOfFile;
+    LARGE_INTEGER AllocationSize;
+    ULONG FileAttributes;
+    ULONG FileNameLength;
+    WCHAR FileName[1];
+} FILE_DIRECTORY_INFORMATION;
+
+#pragma pack(pop)
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
@@ -74,7 +95,6 @@ CString GetCurrentTimeString()
     return timeStr;
 }
 
-
 class CAboutDlg : public CDialogEx
 {
 public:
@@ -112,56 +132,73 @@ BEGIN_MESSAGE_MAP(CAgentGUI2Dlg, CDialogEx)
     ON_WM_QUERYDRAGICON()
     ON_BN_CLICKED(IDC_BUTTON1, &CAgentGUI2Dlg::ClickedButton1)
     ON_MESSAGE(WM_POST_INIT, &CAgentGUI2Dlg::OnPostInit)
+    ON_WM_DESTROY()
 END_MESSAGE_MAP()
 
-// 커널 드라이버에서 메시지를 실시간 수신하는 스레드 함수
+volatile bool g_ShouldTerminate = false;
+
 DWORD WINAPI ListenFromKernel(LPVOID lpParam)
 {
-    HANDLE hPort = NULL;
-    HRESULT hr;
+    // CAgentGUI2Dlg 인스턴스 포인터
+    CAgentGUI2Dlg* pThis = (CAgentGUI2Dlg*)lpParam;
 
-    hr = FilterConnectCommunicationPort(L"\\MiniFilterPort", 0, NULL, 0, NULL, &hPort);
-    if (!SUCCEEDED(hr)) {
-        AfxMessageBox(_T(" 커널 연결 실패 "));
+    // pThis 또는 m_hPort 체크
+    if (!pThis) {
+        // 포인터가 NULL인 경우 (로깅 불가)
         return 1;
     }
 
-    while (true)
+    if (pThis->GetPortHandle() == NULL) {
+        pThis->AppendLog(_T("ListenFromKernel: 커널 포트가 열려 있지 않습니다."));
+        return 1;
+    }
+    HRESULT hr;
+    while (!g_ShouldTerminate)
     {
         BYTE messageBuffer[512] = { 0 };
         DWORD bytesReturned = 0;
 
-        hr = FilterGetMessage(hPort, (PFILTER_MESSAGE_HEADER)messageBuffer, sizeof(messageBuffer), NULL);
-        if (SUCCEEDED(hr))
-        {
-            CHAR* payload = (CHAR*)(messageBuffer + sizeof(FILTER_MESSAGE_HEADER));
+        hr = FilterGetMessage(
+            pThis->GetPortHandle(),
+            (PFILTER_MESSAGE_HEADER)messageBuffer,
+            sizeof(messageBuffer),
+            NULL);
 
-            CString alert;
-            alert.Format(_T(" 탐지 메시지 수신됨: %S"), payload);
-            AfxMessageBox(alert);
-
-            CAgentGUI2Dlg* pThis = (CAgentGUI2Dlg*)lpParam;
-            if (pThis)
-            {
-                pThis->AppendLog(alert);
-
-                if (strcmp(payload, "RANSOMWARE_DETECTED") == 0)
-                {
-                    CString json;
-                    json.Format(_T("{\"ip\":\"%s\", \"message\":\"%S\", \"filename\":\"bait.hwp\", \"log_time\":\"%s\", \"data\":\"alert\"}"),
-                        GetLocalIPAddress().GetString(), payload, GetCurrentTimeString().GetString());
-
-                    pThis->PostToServer(json);
-                }
-            }
-        }
-        else
-        {
+        if (!SUCCEEDED(hr)) {
+            CString errLog;
+            errLog.Format(_T("FilterGetMessage 실패 코드: 0x%08X"), hr);
+            pThis->AppendLog(errLog);
             break;
+        }
+
+        // 메시지 파싱
+        DETECTION_MESSAGE* pAlert = (DETECTION_MESSAGE*)(messageBuffer + sizeof(FILTER_MESSAGE_HEADER));
+
+        CString alert;
+        alert.Format(_T("탐지 메시지 수신됨: %S (파일: %ls, PID: %lu)"),
+            pAlert->AlertType, pAlert->FileName, pAlert->ProcessId);
+        pThis->AppendLog(alert);
+
+        if (strcmp(pAlert->AlertType, "RANSOMWARE_DETECTED") == 0) {
+            CString json;
+            json.Format(_T("{\"ip\":\"%s\", \"message\":\"%S\", \"filename\":\"%ls\", \"log_time\":\"%s\", \"data\":\"alert\"}"),
+                GetLocalIPAddress().GetString(),
+                pAlert->AlertType,
+                pAlert->FileName,
+                GetCurrentTimeString().GetString());
+            pThis->PostToServer(json);
+        }
+        else if (strcmp(pAlert->AlertType, "TERMINATE") == 0) {
+            pThis->AppendLog(_T("[INFO] 커널 종료 메시지 수신됨, 루프 종료"));
+            g_ShouldTerminate = true;
+        }
+        else {
+            CString warn;
+            warn.Format(_T("[무시됨] 알 수 없는 메시지: %S"), pAlert->AlertType);
+            pThis->AppendLog(warn);
         }
     }
 
-    CloseHandle(hPort);
     return 0;
 }
 
@@ -169,43 +206,35 @@ DWORD WINAPI ListenFromKernel(LPVOID lpParam)
 BOOL CAgentGUI2Dlg::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
-
-    // 창 제목 설정
-    SetWindowText(_T("캡스톤_흰둥단"));
-
-    // 시스템 메뉴 설정
-    CMenu* pSysMenu = GetSystemMenu(FALSE);
-    if (pSysMenu)
-    {
-        CString strAboutMenu;
-        strAboutMenu.LoadString(IDS_ABOUTBOX);
-        if (!strAboutMenu.IsEmpty())
-        {
-            pSysMenu->AppendMenu(MF_SEPARATOR);
-            pSysMenu->AppendMenu(MF_STRING, IDM_ABOUTBOX, strAboutMenu);
-        }
-    }
-
-    // 아이콘 설정
     SetIcon(m_hIcon, TRUE);
     SetIcon(m_hIcon, FALSE);
 
-    // 기본 경로 초기화
     SetDlgItemText(IDC_EDIT1, _T("C:\\Downloads"));
     SetDlgItemText(IDC_STATIC_STATUS, _T("랜섬웨어 탐지"));
     m_btnAlert.SetWindowText(_T("검사 시작"));
+    SetDlgItemText(IDC_EDIT1, _T("C:\\Downloads"));
 
-    // 테스트용 경고창 제거
-    // AfxMessageBox(_T("Ransomware detected!"));
+    // 포트 연결
+    HRESULT hr = FilterConnectCommunicationPort(L"\\MiniFilterPort", 0, NULL, 0, NULL, &m_hPort);
+    CString msg;
+    msg.Format(_T("FilterConnectCommunicationPort 결과: 0x%08X"), hr);
+    AppendLog(msg);
 
-    // POST 메시지 전송 및 커널 통신 요청
-    PostMessage(WM_POST_INIT);
-    RequestDirectoryFromKernel();
-    
-    CreateThread(NULL, 0, ListenFromKernel, this, 0, NULL);
+    if (!SUCCEEDED(hr)) {
+        AppendLog(_T("커널 포트 연결 실패"));
+        m_hPort = NULL;
+    }
+    HANDLE hThread = CreateThread(NULL, 0, ListenFromKernel, this, 0, NULL);
+    if (!hThread) {
+        AppendLog(_T("커널 메시지 수신 스레드 생성 실패"));
+    }
+    else {
+        CloseHandle(hThread);  // 스레드 핸들은 닫아도 됩니다. 내부적으로 실행됩니다.
+    }
+
+    PostMessage(WM_POST_INIT);  // 초기 POST 등
     return TRUE;
 }
-
 
 void CAgentGUI2Dlg::OnSysCommand(UINT nID, LPARAM lParam)
 {
@@ -241,6 +270,16 @@ void CAgentGUI2Dlg::OnPaint()
     }
 }
 
+void CAgentGUI2Dlg::OnDestroy()
+{
+    CDialogEx::OnDestroy();
+
+    if (m_hPort) {
+        FilterClose(m_hPort);
+        m_hPort = NULL;
+    }
+}
+
 // 마우스를 드래그할 때 커서를 설정하는 함수
 HCURSOR CAgentGUI2Dlg::OnQueryDragIcon()
 {
@@ -270,11 +309,13 @@ void CAgentGUI2Dlg::ClickedButton1()
 // 로그 메시지를 Edit Control에 추가해 출력하는 함수
 void CAgentGUI2Dlg::AppendLog(CString log)
 {
-    CString currentText;
-    m_editInput.GetWindowText(currentText);
-    currentText += log + _T("\r\n");
-    m_editInput.SetWindowText(currentText);
-    m_editInput.LineScroll(m_editInput.GetLineCount());
+    if (::IsWindow(m_editInput.GetSafeHwnd()))
+    {
+        m_editInput.SetSel(-1, -1);  // 커서를 끝으로 이동
+        m_editInput.ReplaceSel(log + _T("\r\n"));  // 현재 텍스트 끝에 추가
+    }
+
+    AppendToFile(log);
 }
 
 // 로그 메시지를 데스크탑에 agent_log.txt로 저장하는 함수
@@ -295,45 +336,121 @@ void CAgentGUI2Dlg::AppendToFile(CString text)
 }
 
 // 서버로 JSON 메시지를 POST 방식으로 전송하는 함수
+
+void CAgentGUI2Dlg::RequestDirectoryFromKernel()
+{
+    if (m_hPort == NULL) {
+        AppendLog(_T("커널 포트가 열려 있지 않습니다."));
+        return;
+    }
+
+    CString watchPath;
+    GetDlgItemText(IDC_EDIT1, watchPath);
+    if (watchPath.IsEmpty()) {
+        AppendLog(_T("경로 입력이 비어 있습니다."));
+        return;
+    }
+
+    watchPath.TrimRight(_T("\\"));
+    CString ntPath = L"\\??\\" + watchPath;
+
+    if (ntPath.GetLength() >= MAX_PATH) {
+        AppendLog(_T("NT 경로 길이 초과, 전송 취소"));
+        return;
+    }
+
+    WCHAR pathBuffer[MAX_PATH] = { 0 };
+    wcscpy_s(pathBuffer, ntPath.GetString());
+
+    BYTE buffer[4096] = { 0 };
+    DWORD bytesReturned = 0;
+
+    HRESULT hr = FilterSendMessage(
+        m_hPort,
+        pathBuffer,
+        (DWORD)(wcslen(pathBuffer) + 1) * sizeof(WCHAR),
+        buffer,
+        sizeof(buffer),
+        &bytesReturned
+    );
+
+    if (!SUCCEEDED(hr)) {
+        CString err;
+        err.Format(_T("FilterSendMessage 실패: 0x%08X"), hr);
+        AppendLog(err);
+        return;
+    }
+
+
+    AppendLog(_T("커널 응답 수신"));
+
+    if (bytesReturned < sizeof(FILE_DIRECTORY_INFORMATION)) {
+        AppendLog(_T("커널 응답 데이터 부족, 파싱 생략"));
+        return;
+    }
+
+    FILE_DIRECTORY_INFORMATION* pInfo = (FILE_DIRECTORY_INFORMATION*)buffer;
+    while (true) {
+        CString fileName(pInfo->FileName, pInfo->FileNameLength / sizeof(WCHAR));
+
+        CString msg;
+        msg.Format(_T("File name: %s"), fileName.GetString());
+        AppendLog(msg);
+
+        CString json;
+        json.Format(_T("{\"ip\":\"%s\", \"message\":\"File listed\", \"filename\":\"%s\", \"log_time\":\"%s\", \"data\":\"dirinfo\"}"),
+            GetLocalIPAddress().GetString(),
+            fileName.GetString(),
+            GetCurrentTimeString().GetString());
+
+        PostToServer(json);
+
+        if (pInfo->NextEntryOffset == 0) break;
+        pInfo = (FILE_DIRECTORY_INFORMATION*)((BYTE*)pInfo + pInfo->NextEntryOffset);
+    }
+}
+
 void CAgentGUI2Dlg::PostToServer(CString message)
 {
+    const int MAX_RETRY = 1;
+    int retryCount = 0;
+
+RETRY:
     HINTERNET hSession = WinHttpOpen(L"AgentApp", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
-    if (!hSession)
-    {
+    if (!hSession) {
         CString log = GetCurrentTimeString() + _T(" WinHttpOpen failed");
         AppendLog(log);
+        AppendToFile(log);
         return;
     }
 
     HINTERNET hConnect = WinHttpConnect(hSession, SERVER_HOST, SERVER_PORT, 0);
-    if (!hConnect)
-    {
+    if (!hConnect) {
         CString log = GetCurrentTimeString() + _T(" WinHttpConnect failed");
         AppendLog(log);
+        AppendToFile(log);
         WinHttpCloseHandle(hSession);
         return;
     }
 
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", SERVER_PATH, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
-    if (!hRequest)
-    {
+    if (!hRequest) {
         CString log = GetCurrentTimeString() + _T(" WinHttpOpenRequest failed");
-        AppendLog(log); 
+        AppendLog(log);
+        AppendToFile(log);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return;
     }
 
-    // 타임아웃 설정 및 UTF-8 변환
     WinHttpSetTimeouts(hRequest, 3000, 3000, 3000, 5000);
     CW2A utf8(message, CP_UTF8);
     const char* data = (LPCSTR)utf8;
     size_t len = strlen(data);
 
-    // DWORD 범위 초과 방지
-    if (len > MAXDWORD)
-    {
+    if (len > MAXDWORD) {
         AppendLog(_T(" 전송 데이터 길이가 DWORD를 초과합니다. 전송 취소됨."));
+        AppendToFile(_T(" 전송 데이터 길이가 DWORD를 초과합니다. 전송 취소됨."));
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
@@ -342,139 +459,63 @@ void CAgentGUI2Dlg::PostToServer(CString message)
 
     DWORD dwLen = static_cast<DWORD>(len);
 
-    // 서버에 POST 요청 보내기
     BOOL sent = WinHttpSendRequest(hRequest, CONTENT_TYPE_HEADER, -1L, (LPVOID)data, dwLen, dwLen, 0);
 
-    // 응답 수신 및 로그 출력
-    if (sent && WinHttpReceiveResponse(hRequest, NULL))
-    {
+    if (sent && WinHttpReceiveResponse(hRequest, NULL)) {
         DWORD statusCode = 0, size = sizeof(statusCode);
         WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &statusCode, &size, NULL);
 
         CString log1;
         log1.Format(_T("%s Response code: %lu"), GetCurrentTimeString(), statusCode);
-        AppendLog(log1); 
+        AppendLog(log1);
+        AppendToFile(log1);
 
         DWORD dwSize = 0;
         WinHttpQueryDataAvailable(hRequest, &dwSize);
 
         CString log2;
-        if (dwSize > 0)
-        {
+        if (dwSize > 0) {
             std::vector<char> buffer(dwSize + 1);
             DWORD dwDownloaded = 0;
             WinHttpReadData(hRequest, buffer.data(), dwSize, &dwDownloaded);
             buffer[dwDownloaded] = '\0';
-            //  UTF-8 → 유니코드 CString 변환
             CString response = CString(CA2W(buffer.data(), CP_UTF8));
-
             log2.Format(_T("%s Server replied: %s"), GetCurrentTimeString(), response);
         }
-        else
-        {
+        else {
             log2.Format(_T("%s Response received (no message)"), GetCurrentTimeString());
         }
-        AppendLog(log2); 
+        AppendLog(log2);
+        AppendToFile(log2);
     }
-    else
-    {
+    else {
         DWORD err = GetLastError();
         CString errMsg;
         errMsg.Format(_T("%s Failed to send request - error code: %lu"), GetCurrentTimeString(), err);
-        AppendLog(errMsg); AppendToFile(errMsg);
+        AppendLog(errMsg);
+        AppendToFile(errMsg);
+        if (retryCount < MAX_RETRY) {  // 최대 1회 재시도
+            retryCount++;
+            AppendLog(_T("1초 후 POST 재시도 시도 중..."));
+            Sleep(1000);
+            WinHttpCloseHandle(hRequest);  //재시도 전에 핸들 해제
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+            goto RETRY;  // 재귀 대신 goto / 루프 재시도
+        }
+        else {
+            AppendLog(_T("POST 재시도 한계 도달. 핸들 해제 후 종료."));
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+            return;  // 실패 시 여기서 종료
+        }
     }
 
+    // 성공 시 핸들 해제
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
-
 }
 
-// 커널에서 전달되는 디렉터리 정보 구조체 정의
-#pragma pack(push, 1)
-typedef struct _FILE_DIRECTORY_INFORMATION {
-    ULONG NextEntryOffset;
-    ULONG FileIndex;
-    LARGE_INTEGER CreationTime;
-    LARGE_INTEGER LastAccessTime;
-    LARGE_INTEGER LastWriteTime;
-    LARGE_INTEGER ChangeTime;
-    LARGE_INTEGER EndOfFile;
-    LARGE_INTEGER AllocationSize;
-    ULONG FileAttributes;
-    ULONG FileNameLength;
-    WCHAR FileName[1];
-} FILE_DIRECTORY_INFORMATION;
-#pragma pack(pop)
 
-// 커널 드라이버에서 디렉터리 목록을 받아오는 요청 함수
-void CAgentGUI2Dlg::RequestDirectoryFromKernel()
-{
-    CString watchPath = _T("C:\\Downloads");               // 1. 유동 경로 선언
-    GetDlgItemText(IDC_EDIT1, watchPath);   // 입력창에서 경로 읽기
-
-
-    // [1] 경로 유효성 검사
-    if (watchPath.IsEmpty())
-    {
-        AppendLog(_T("⚠️ No path entered"));
-        return;
-    }
-
-
-    // [2] 끝에 역슬래시 제거
-    watchPath.TrimRight(_T("\\"));
-
-    CString log;
-    log.Format(_T(">> Requested path: %s"), watchPath);
-    AppendLog(log);
-    AppendToFile(log);
-
-    CString ntPath = L"\\??\\" + watchPath;         // 2. NT 포맷으로 변환
-    WCHAR pathBuffer[MAX_PATH] = { 0 };
-    wcscpy_s(pathBuffer, ntPath);                          // 3. WCHAR 배열로 복사
-
-    HANDLE hPort = NULL;
-    HRESULT hr = FilterConnectCommunicationPort(L"\\MiniFilterPort", 0, NULL, 0, NULL, &hPort);
-    if (!SUCCEEDED(hr)) {
-        AppendLog(_T("Failed to connect to filter port"));
-        return;
-    }
-
-    BYTE buffer[4096] = { 0 };
-    DWORD bytesReturned = 0;
-
-    hr = FilterSendMessage(
-        hPort, pathBuffer, (DWORD)(wcslen(pathBuffer) + 1) * sizeof(WCHAR),
-        buffer, sizeof(buffer), &bytesReturned);
-
-    if (!SUCCEEDED(hr)) {
-        AppendLog(_T("Failed to send message to driver"));
-        CloseHandle(hPort);
-        return;
-    }
-
-    AppendLog(_T("Received response from kernel driver"));
-
-    FILE_DIRECTORY_INFORMATION* pInfo = (FILE_DIRECTORY_INFORMATION*)buffer;
-    while (true)
-    {
-        CString fileName(pInfo->FileName, pInfo->FileNameLength / sizeof(WCHAR));
-
-        //  경고 방지를 위해 GetString() 추가
-        CString msg;
-        msg.Format(_T("File name: %s"), fileName.GetString());
-        AppendLog(msg);
-
-        //  여기서도 모든 CString 파라미터에 .GetString() 추가
-        CString json;
-        json.Format(_T("{\"ip\":\"%s\", \"message\":\"File listed\", \"filename\":\"%s\", \"log_time\":\"%s\", \"data\":\"dirinfo\"}"),
-            GetLocalIPAddress().GetString(), fileName.GetString(), GetCurrentTimeString().GetString());
-        PostToServer(json);
-
-        if (pInfo->NextEntryOffset == 0) break;
-        pInfo = (FILE_DIRECTORY_INFORMATION*)((BYTE*)pInfo + pInfo->NextEntryOffset);
-    }
-
-    CloseHandle(hPort);
-}
