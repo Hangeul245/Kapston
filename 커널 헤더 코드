@@ -1,0 +1,73 @@
+#pragma once
+
+#include <fltKernel.h>
+
+// 전역 포인터 선언 (정의는 .c 파일에 있음)
+extern PFLT_FILTER gFilterHandle;
+extern PFLT_PORT g_ServerPort;
+extern PFLT_PORT g_ClientPort;
+
+// 미끼 파일 경로 선언 (주의: 정의는 .c 파일에 있어야 함)
+extern UNICODE_STRING gBaitFilePath;
+
+// 드라이버 초기화
+NTSTATUS NTAPI DriverEntry(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ PUNICODE_STRING RegistryPath
+);
+
+// 드라이버 언로드
+VOID MiniFilterUnload(
+    _In_ FLT_FILTER_UNLOAD_FLAGS Flags
+);
+
+// 인스턴스 설정 (볼륨 필터링 조건 설정 시 사용)
+NTSTATUS MiniFilterInstanceSetup(
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _In_ FLT_INSTANCE_SETUP_FLAGS Flags,
+    _In_ DEVICE_TYPE VolumeDeviceType,
+    _In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType
+);
+
+// 미끼 파일 생성 함수
+NTSTATUS CreateBaitFile(
+    PFLT_FILTER Filter,
+    PFLT_INSTANCE Instance
+);
+
+// 디렉토리 내 파일 목록 조회 함수
+NTSTATUS ListFilesWithMinifilter(
+    PFLT_FILTER Filter,
+    PFLT_INSTANCE Instance,
+    PUNICODE_STRING DirectoryPath,
+    PVOID OutputBuffer,
+    ULONG OutputBufferLength,
+    PULONG ReturnLength
+);
+
+// 유저 모드 에이전트와 연결 시 콜백
+NTSTATUS MiniFilterConnectNotify(
+    PFLT_PORT ClientPort,
+    PVOID ServerPortCookie,
+    PVOID ConnectionContext,
+    ULONG SizeOfContext,
+    PVOID* ConnectionCookie
+);
+
+// 유저 모드 에이전트로부터 메시지 수신 시 콜백
+NTSTATUS MiniFilterMessageNotify(
+    PVOID PortCookie,
+    PVOID InputBuffer,
+    ULONG InputBufferLength,
+    PVOID OutputBuffer,
+    ULONG OutputBufferLength,
+    PULONG ReturnOutputBufferLength
+);
+
+// Write 요청 처리 (PreOperation)
+FLT_PREOP_CALLBACK_STATUS MiniFilterPreWriteOperation(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _Out_ PVOID* CompletionContext
+);
+
