@@ -1,8 +1,10 @@
 #pragma once
 
-#ifndef __AFXWIN_H__
-#error "pch.h를 먼저 포함하세요."
-#endif
+//  반드시 pch.h를 먼저 포함해야 함
+#include "pch.h"
+
+#ifndef AGENTGUI2_H
+#define AGENTGUI2_H
 
 #include "resource.h"  // 리소스 심볼 정의
 
@@ -13,12 +15,12 @@ class CAgentGUI2App : public CWinApp
 public:
     CAgentGUI2App();
 
-    // 재정의
-public:
-    virtual BOOL InitInstance();  // 애플리케이션 초기화
+    // 애플리케이션 초기화
+    virtual BOOL InitInstance();
 
-    // 구현
     DECLARE_MESSAGE_MAP()
 };
 
 extern CAgentGUI2App theApp;
+
+#endif // AGENTGUI2_H
