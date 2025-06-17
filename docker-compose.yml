@@ -1,17 +1,44 @@
 version: '3.8'
 
 services:
-  app:
-    build: .
-    ports:
-      - "3000:3000"
-    environment:
-      DATABASE_URL: mysql://test1:test1@db:3306/my_db
-    networks:
-      - capstone-net
+  my-flask-app:
+    build:
+      context: ./app                  # Dockerfile 위치
+    container_name: my-flask-app
     volumes:
-      - .:/app
+      - ./app:/usr/src/app            # app 코드만 마운트
+    working_dir: /usr/src/app         # app 패키지를 실행할 기준 경로
+    command: python3 app.py           # 컨테이너가 종료되지 않고 대기중인 상태로 바꾸려면 
+                                      # (sleep infinity 명령을 입력하자.)
+    ports:
+      - "5000:5000"                   # Flask 외부 접속용 포트
+      - "5002:5002"
+      - "5001:5001"
+    depends_on:
+      - my-mysql-app
+    networks:
+      - mynetwork
+    environment:
+      - MYSQL_HOST=my-mysql-app
+      - MYSQL_PORT=3306
+      - MYSQL_USER=test1
+      - MYSQL_PASSWORD=test1
+      - MYSQL_DATABASE=set_db
+
+  my-mysql-app:
+    build:
+      context: ./mysql_init          # Dockerfile 위치 (init 스크립트 복사)
+    container_name: my-mysql-app
+    environment:
+      MYSQL_ROOT_PASSWORD: 1234
+    ports:
+      - "3306:3306"
+      - "33060:33060"
+    volumes:
+      - ./mysql_data:/var/lib/mysql  # 데이터 볼륨
+    networks:
+      - mynetwork
 
 networks:
-  capstone-net:
-    external: true
+  mynetwork:
+    driver: bridge
