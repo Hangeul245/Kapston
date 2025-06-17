@@ -1,4 +1,3 @@
-
 # 1)MySQL 연결 및 CRUD 로직을 담당하는 모듈
 import os
 import mysql.connector
